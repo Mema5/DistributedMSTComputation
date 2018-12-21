@@ -1,0 +1,536 @@
+"""
+Author: Maël Madon
+
+Implementation in dist algo of the GHS algorithm.
+The code and name of the variables follow the original paper of Gallager, Humblet and Spira
+
+Gathering infos:
+An external node is in charge of gathering the informations on the MST being computed: each 
+time an edge is declared as BRANCH by a node, it sends a message to the gatherer.
+
+Postponing messages:
+To be able to treat messages later, we have a queue of incoming messages for each node.
+A "receive" just enqueue the message and the sender in the queue.
+A "postpone" does basically the same.
+The run procedure of each node empties that queue and handle the messages.
+
+Verbose mode:
+If the VERBOSE variable bellow is True, the console will show each messages sent, received,
+posponed and the execution of the internal procedures.
+If not: we will only see the output of the MST by the gatherer.
+
+Topology:
+We can select the number of nodes and the topology we want in the "main" procedure at the end
+of this code. 
+We use the graphviz library to display nice graphs and their MST.
+"""
+VERBOSE = True
+
+
+import math
+import time
+from random import randint
+from collections import deque
+from enum import Enum
+from graphviz import Graph
+
+
+# Quelques classes utiles pour representer nos etats, messages
+class State(Enum):
+    SLEEPING = 0
+    FIND = 1
+    FOUND = 2
+
+class ChannelStatus(Enum):
+    """Represent the status of the considered channel"""
+    BASIC = 0
+    BRANCH = 1
+    REJECT = 2
+
+class Message():
+    pass
+
+class Connect(Message):
+    """Represent the message <connect>"""
+    def __init__(self, level):
+        self.level = level
+
+    def __str__(self):
+        return "<CONNECT, {0}>".format(self.level)
+
+class Initiate(Message):
+    """Represent the message <initiate>"""
+    def __init__(self, level, name, state):
+        self.level = level
+        self.name = name
+        self.state = state
+
+    def __str__(self):
+        return "<INITIATE, {0}, {1}, {2}>".format(self.level, self.name, self.state)
+
+class Report(Message):
+    """Represent the message <report>"""
+    def __init__(self, weight):
+        self.weight = weight
+
+    def __str__(self):
+        return "<REPORT, {0}>".format(self.weight)
+
+class Test(Message):
+    """Represent the message <test>"""
+    def __init__(self, level, name):
+        self.level = level
+        self.name = name
+
+    def __str__(self):
+        return "<TEST, {0}, {1}>".format(self.level, self.name)
+
+class Accept(Message):
+    """Represent the message <accept>"""
+    def __init__(self):
+        pass
+
+    def __str__(self):
+        return "<ACCEPT>"
+
+class Reject(Message):
+    """Represent the message <reject>"""
+    def __init__(self):
+        pass
+
+    def __str__(self):
+        return "<REJECT>"
+
+class Changeroot(Message):
+    """Represent the message <changeroot>"""
+    def __init__(self):
+        pass
+
+    def __str__(self):
+        return "<CHANGEROOT>"
+
+
+
+
+
+# Code for the basic nodes
+class Agent(process):
+
+    ########## SETUP PROCEDURES ##########
+    def setup(weight, node_num, gatherer):
+        """Full setup of the node:
+        weight: a dictionnary neighbour/weight"""
+
+        # Initializing the states
+        self.state = State.SLEEPING
+        self.state_channel = {}     # dictionnary storing the channel states
+        for k in weight.keys():
+            state_channel.update({ k : ChannelStatus.BASIC })
+
+        # Other useful variables
+        self.fragment = None
+        self.level = None
+        self.best_edge = None
+        self.best_wt = None
+        self.test_edge = None
+        self.in_branch = None
+        self.find_count = None
+
+        
+        # Queue of incoming messages
+        self.msg = deque([])
+
+
+    ########## INTERNAL PROCEDURES ##########
+    # Procedure WAKEUP: to be executed on each node at the beginning
+    def wakeup():
+        if VERBOSE:
+            print(str(self)+": execute procedure WAKEUP")
+        # find the adjacent edge of minimum weight -> v
+        w = math.inf
+        for k, ww in weight.items():
+            if ww < w:
+                w = ww
+                v = k
+
+        # initialise...
+        state_channel[v] = ChannelStatus.BRANCH
+
+        # inform the gatherer of the new edge in the mst
+        send( ((self, v),weight[v]), to=gatherer )
+        if VERBOSE:
+            print("%s: fragment %d created with %s" % (str(self), weight[v], str(v)))
+
+
+        level = 0
+        state = State.FOUND
+        find_count = 0
+
+        # send the connect request
+        sendwrap(Connect(0), v)
+
+
+    # Procedure TEST: try to find the best edge to a different fragment 
+    def test():
+
+        # The minimum-weight basic adjacent edge or None if there is not
+        test_edge = None
+        w = math.inf
+        for k, ww in weight.items():
+            if (state_channel[k] == ChannelStatus.BASIC) and (ww < w):
+                w = ww
+                test_edge = k
+
+        # If there is one, send a test request to it
+        if test_edge != None:
+            if VERBOSE:
+                print(str(self)+": execute procedure TEST: found a basic edge")
+            sendwrap(Test(self.level, self.fragment), test_edge)
+
+        # If there is not, exceute procedure report
+        else:
+            if VERBOSE:
+                print(str(self)+": execute procedure TEST: no basic adjacent edge")
+            report()
+
+
+    # Procedure REPORT: reports the result of an ACCEPT to father
+    def report():
+        if VERBOSE:
+            print(str(self)+": execute procedure REPORT")
+
+        if find_count == 0 and test_edge == None:
+            self.state = State.FOUND
+            sendwrap(Report(self.best_wt), in_branch)
+
+
+    # Procedure CHANGEROOT: forward the message to the new channel and connect   
+    def changeroot():
+        if VERBOSE:
+            print(str(self)+": execute procedure CHANGEROOT")
+
+        if state_channel[best_edge] == ChannelStatus.BRANCH:
+            # forward message through the tree
+            sendwrap(Changeroot(), best_edge)
+        else:
+            # Connect the channel: update state and send CONNECT request
+            sendwrap(Connect(self.level), best_edge)
+            state_channel[best_edge] = ChannelStatus.BRANCH
+
+            # inform the gatherer of the new edge
+            send( ((self, best_edge),weight[best_edge]), to=gatherer )
+            if VERBOSE:
+                print("%s: fragment %d created with %s" % (str(self), weight[best_edge], str(best_edge)))
+
+
+
+    def halt():
+        sendwrap("halt", self.gatherer)
+
+
+
+
+
+    ########## SENDING PROCEDURES ##########
+    def sendwrap(m, v):
+        """A wrapper of send fonction for printing"""
+        send(m, to=v)
+        if VERBOSE:
+            print("   %s -> %s:\tsend %s" % (str(self), str(v), m))
+
+
+
+
+
+    ########## RECEIVE PROCEDURES ##########
+    def receive(msg=m, from_=v):
+        # Just enqueue the message, the run precedure will read them
+        msg.appendleft((m,v))
+
+
+
+    def postpone(m, v):
+        if VERBOSE:
+            print("   %s -> %s:\tpspn %s" % (str(v), str(self), m))
+
+        if await( len(msg) > 0):
+            # wait until the queue is not empty and then
+            # put the message at the end
+            msg.appendleft((m,v))
+
+        elif timeout(0.5):
+            # queue remains empty...
+            msg.appendleft((m,v))
+
+
+
+    def handle_message(m, v):
+        """Process the message m received from v, postponing its execution if needed
+        Execution follows GHS algo as written in the original paper"""
+        if VERBOSE:
+            print("   %s -> %s:\trcv  %s" % (str(v), str(self), m))
+            print("   %s : current state %s" % (self, str(state)))
+
+        # CONNECT
+        if isinstance(m, Connect):
+
+            if self.state == State.SLEEPING:    # should never occur because everyone wake up at the beggining
+                wakeup()
+
+            if m.level < self.level:
+                state_channel[v] = ChannelStatus.BRANCH
+                sendwrap(Initiate(self.level, self.fragment, self.state), v)
+
+
+                # inform the gatherer of the new edge in the mst
+                send( ((self, v),weight[v]), to=gatherer )
+                if VERBOSE:
+                    print("%s: fragment %d created with %s" % (str(self), weight[v], str(v)))
+
+                if state == State.FIND:
+                    find_count += 1
+
+            else:
+                if state_channel[v] == ChannelStatus.BASIC:
+                    postpone(m, v)
+                else:
+                    sendwrap(Initiate(self.level+1, weight[v], State.FIND), v)
+
+        # INITIATE: update the values
+        elif isinstance(m, Initiate):
+            self.level = m.level
+            self.fragment = m.name
+            self.state = m.state
+            in_branch = v
+            best_edge = None
+            best_wt = math.inf
+
+            # propagate the wave to the suns in the fragment
+            for u in weight.keys():
+                if (u != v) and (state_channel[u] == ChannelStatus.BRANCH):
+                    sendwrap(m, u)  # propagate the Initiate msg
+                    if self.state == State.FIND:
+                        find_count += 1
+
+            # start a finding procedure if needed
+            if m.state == State.FIND:
+                test()
+
+
+        # TEST: answer to the asking node
+        elif isinstance(m, Test):
+            if self.state == State.SLEEPING:    # should never occur because everyone wake up at the beggining
+                wakeup()
+
+            if self.level < m.level:            # wait a little bit, maybe my level will grow
+                postpone(m, v)
+            else:
+                if self.fragment != m.name:       # in a different fragment: test accepted
+                    sendwrap(Accept(), v)
+                else:                             # same fragment -> reject
+                    if state_channel[v] == ChannelStatus.BASIC:
+                        state_channel[v] = ChannelStatus.REJECT
+
+                    if self.test_edge != v:
+                        sendwrap(Reject(), v)
+                    else:
+                        test()
+
+
+        # REJECT: reject the edge and try the next one
+        elif isinstance(m, Reject):
+            if state_channel[v] == ChannelStatus.BASIC:
+                state_channel[v] = ChannelStatus.REJECT
+            test()
+
+
+        # ACCEPT: check if the edge found has better weight and report
+        elif isinstance(m, Accept):
+            self.test_edge = None
+
+            # Look if the accept made us found a better weight:
+            if weight[v] < best_wt:
+                best_edge = v
+                best_wt = weight[v]
+
+            report()
+
+        
+        # REPORT: 
+        elif isinstance(m, Report):
+            if v != in_branch:      # case report from son to father
+                find_count -= 1
+
+                if m.weight < self.best_wt: # update our values if needed
+                    best_wt = m.weight
+                    best_edge = v
+                
+                report()            # propagate the info
+
+            else:                   # case report from root to root
+                if self.state == State.FIND:
+                    postpone(m, v)
+                elif m.weight > best_wt:
+                    changeroot()
+                elif m.weight == math.inf:
+                    halt()
+
+
+        # CHANGEROOT: on receipt, execute procedure CHANGEROOT
+        elif isinstance(m, Changeroot):
+            changeroot()
+
+
+
+
+
+
+    ########## MAIN PROCEDURE ##########
+    def run():
+        # We can assume that every node executes the procedure wakeup at the beginning
+        wakeup()
+        
+
+        # Every node is basically waiting for a message to arrive
+        while True:
+            if VERBOSE: # to slow down the algorithm
+                time.sleep(0.5)
+            if await( len(self.msg) > 0 ):
+                m,v = msg.pop()
+                handle_message(m,v)
+
+
+
+
+# Code for the node in charge of gathering the informations
+class Gatherer(process):
+    """ Create two graphs: the topology in witch we are working and the MST computed.
+    This node receives the information for each fragment created and print the MST at the end
+    """
+
+    def setup(agents, topo, topotype):
+        self.n = len(agents)
+        self.active = True
+        self.mst = {}
+        self.rev_agents = { agents[k] : k for k in range(n) }
+
+        ########## Graphviz ##########
+        # object graph for pretty print
+        self.graph = Graph(name='Topology '+topotype, format='png')
+        self.graph_mst = Graph(name='MST computed', format='png')
+        for k in range(n): # nodes
+            graph.node(str(k), str(agents[k]))
+            graph_mst.node(str(k), str(agents[k]))
+        for (u,v) in topo.keys():
+            if u<v:
+                graph.edge(str(u), str(v), label=str(topo[(u,v)]))
+
+        # draw the topology
+        graph.view(cleanup=True)
+
+
+    def run():
+        # Stop condition
+        if await (not(self.active)):
+            #print("\nMst computed !\n"+str(mst))
+            print("\nMst computed !")
+
+            # draw the mst
+            for (u,v) in topo.keys():
+                if u<v:
+                    lab = str(topo[(u,v)])
+                    if (agents[u],agents[v]) in mst.keys():
+                        lab += "*"
+                    graph_mst.edge(str(u), str(v), label=lab)
+            graph_mst.view(cleanup=True)
+
+            print("############ End algorithm ############")
+
+    def receive(msg="halt", from_=q):
+        active = False
+
+    def receive(msg=(edge, weight)):
+        # New acknowledgement of an edge in the MST
+        mst[(edge)] = weight
+
+        # add it in the graphviz
+        # u = rev_agents[edge[0]]
+        # v = rev_agents[edge[1]]
+        # if u<v:
+        #     graph.edge(str(u), str(v), label="*")
+
+
+
+
+def topology(name, n):
+    """Select the topology by changing the name and the number of nodes
+    To construct undirected graph, we always add (i,j) and (j,i) with same weight in the dict"""
+    topo = {}   # dictionnary edge/weight
+
+    # Linear graph, n nodes, increasing weight
+    if name=="linear":
+        for i in range(n-1):
+            topo[ (i, i+1) ] = i
+            topo[ (i+1, i) ] = i
+
+    
+    # Complete graph, n nodes, weight increasing in lexiocographic order
+    elif name=="complete":
+        w = 0
+
+        for i in range(n-1):
+            for j in range(i+1, n):
+                topo[ (i,j) ] = w
+                topo[ (j,i) ] = w
+                w += 1
+
+    # l*l grid graph of n nodes, l=ceil(sqrt(n)), random (but unique) weight
+    elif name=="grid":
+        l = math.ceil(math.sqrt(n))
+        w = randint(0,10*n)
+
+        for i in range(l):
+            for j in range(l):
+
+                if l*i+j < n:
+
+                    if i+1 < l and (i+1)*l+j < n: 
+                        while w in topo.values(): w = randint(0,10*n)
+                        topo[ (i*l+j,(i+1)*l+j) ] = w
+                        topo[ ((i+1)*l+j,i*l+j) ] = w
+                    if j+1 < l and i*l+j+1 < n:
+                        while w in topo.values(): w = randint(0,10*n)
+                        topo[ (i*l+j,i*l+j+1) ] = w
+                        topo[ (i*l+j+1,i*l+j) ] = w
+
+    return (n, topo)
+
+
+
+
+
+
+
+def main():
+    ########## Topology ##########
+    # Select between: linear, complete, grid
+    # Select number of nodes
+    topotype = "grid" 
+    number_nodes = 5
+
+    n,t = topology(topotype, number_nodes)
+    agents = list(new(Agent, num=n))
+
+
+    ########## Run ##########
+    gatherer = new(Gatherer)
+    setup( gatherer, args=(agents,t, topotype) )
+
+    for k in range(len(agents)):
+        weight = { agents[j] : t[(i,j)] for (i,j) in t.keys() if i==k }
+        setup( agents[k], args=(weight,k,gatherer)) 
+
+    print("\n############ Begin algorithm ############")
+
+    start(gatherer)
+    start(agents)
